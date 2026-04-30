@@ -16,6 +16,152 @@ warnings.filterwarnings("ignore")
 
 
 # ─────────────────────────────────────────────
+# TV Health Check
+# ─────────────────────────────────────────────
+
+@dataclass
+class HealthCheckResult:
+    passed: bool = True
+    errors: list = field(default_factory=list)
+    warnings: list = field(default_factory=list)
+    stats: dict = field(default_factory=dict)
+
+
+def tv_health_check(df: pd.DataFrame) -> HealthCheckResult:
+    """
+    Validates TradingView OHLCV data quality before analysis.
+    Errors are fatal (analysis should not proceed); warnings are advisory.
+    """
+    result = HealthCheckResult()
+    n = len(df)
+
+    # ── Basic stats ──
+    result.stats["row_count"] = n
+    if n > 0 and "date" in df.columns:
+        result.stats["date_start"] = str(df["date"].iloc[0])[:10]
+        result.stats["date_end"] = str(df["date"].iloc[-1])[:10]
+
+    # ── Minimum rows ──
+    if n < 10:
+        result.errors.append(f"Insufficient data: {n} rows (minimum 10 required for any analysis)")
+        result.passed = False
+        return result  # no point checking further
+    if n < 30:
+        result.warnings.append(f"Only {n} rows — phase detection requires ≥30 candles")
+    elif n < 100:
+        result.warnings.append(f"Only {n} rows — analysis reliability improves with more data")
+
+    # ── Required columns ──
+    required = {"open", "high", "low", "close"}
+    missing = required - set(df.columns)
+    if missing:
+        result.errors.append(f"Missing required columns: {sorted(missing)}")
+        result.passed = False
+        return result
+
+    # ── NaN values in price columns ──
+    price_cols = ["open", "high", "low", "close"]
+    for col in price_cols:
+        nan_count = df[col].isna().sum()
+        if nan_count > 0:
+            pct = nan_count / n * 100
+            if pct > 5:
+                result.errors.append(f"Column '{col}' has {nan_count} NaN values ({pct:.1f}%) — too many missing prices")
+                result.passed = False
+            else:
+                result.warnings.append(f"Column '{col}' has {nan_count} NaN value(s) ({pct:.1f}%)")
+
+    if not result.passed:
+        return result
+
+    # ── Non-positive prices ──
+    for col in price_cols:
+        non_pos = (df[col] <= 0).sum()
+        if non_pos > 0:
+            result.errors.append(f"Column '{col}' has {non_pos} non-positive value(s) (zero or negative price)")
+            result.passed = False
+
+    # ── OHLC consistency: high >= low ──
+    invalid_hl = (df["high"] < df["low"]).sum()
+    if invalid_hl > 0:
+        result.errors.append(f"{invalid_hl} candle(s) where high < low (corrupted OHLC data)")
+        result.passed = False
+
+    # ── OHLC consistency: high >= open/close and low <= open/close ──
+    tol = 1e-8
+    invalid_high = ((df["high"] + tol) < df[["open", "close"]].max(axis=1)).sum()
+    invalid_low = ((df["low"] - tol) > df[["open", "close"]].min(axis=1)).sum()
+    if invalid_high > 0:
+        result.errors.append(f"{invalid_high} candle(s) where high < max(open, close)")
+        result.passed = False
+    if invalid_low > 0:
+        result.errors.append(f"{invalid_low} candle(s) where low > min(open, close)")
+        result.passed = False
+
+    # ── Duplicate timestamps ──
+    if "date" in df.columns:
+        dupes = df["date"].duplicated().sum()
+        if dupes > 0:
+            result.warnings.append(f"{dupes} duplicate timestamp(s) detected")
+
+    # ── Date gaps ──
+    if "date" in df.columns and n >= 2:
+        deltas = df["date"].diff().dropna()
+        median_delta = deltas.median()
+        if median_delta.total_seconds() > 0:
+            gap_threshold = median_delta * 5
+            large_gaps = (deltas > gap_threshold).sum()
+            if large_gaps > 0:
+                result.warnings.append(
+                    f"{large_gaps} large gap(s) in time series (>{int(gap_threshold.total_seconds() / 3600)}h between candles)"
+                )
+
+    # ── Volume ──
+    if "volume" not in df.columns or df["volume"].sum() == 0:
+        result.warnings.append("No volume data — volume-based signals will be unavailable")
+    else:
+        zero_vol = (df["volume"] == 0).sum()
+        if zero_vol / n > 0.2:
+            result.warnings.append(f"{zero_vol} candles ({zero_vol/n*100:.0f}%) have zero volume")
+
+    # ── Extreme single-candle moves (body > 30% of price) ──
+    body_pct = (df["close"] - df["open"]).abs() / df["open"] * 100
+    extreme = (body_pct > 30).sum()
+    if extreme > 0:
+        result.warnings.append(f"{extreme} candle(s) with body move >30% — possible data anomaly or split")
+
+    return result
+
+
+def print_health_report(result: HealthCheckResult) -> None:
+    sep = "═" * 60
+    status = "✅ PASSED" if result.passed else "❌ FAILED"
+    print(f"\n{sep}")
+    print(f"  TV DATA HEALTH CHECK — {status}")
+    print(sep)
+
+    stats = result.stats
+    if "row_count" in stats:
+        date_range = f"{stats.get('date_start', '?')} → {stats.get('date_end', '?')}"
+        print(f"  Rows : {stats['row_count']}   |   Period : {date_range}")
+
+    if result.errors:
+        print("\n  ERRORS (analysis blocked):")
+        for e in result.errors:
+            print(f"    ✗  {e}")
+
+    if result.warnings:
+        print("\n  WARNINGS:")
+        for w in result.warnings:
+            print(f"    ⚠  {w}")
+
+    if not result.errors and not result.warnings:
+        print("\n  No issues found — data looks clean.")
+
+    print(f"{sep}\n")
+
+
+# ─────────────────────────────────────────────
 # Types / Enums
 # ─────────────────────────────────────────────
 
