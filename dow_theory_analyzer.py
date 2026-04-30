@@ -27,10 +27,13 @@ class HealthCheckResult:
     stats: dict = field(default_factory=dict)
 
 
-def tv_health_check(df: pd.DataFrame) -> HealthCheckResult:
+def tv_health_check(df: pd.DataFrame, seuil_corps_pct: float = 30.0) -> HealthCheckResult:
     """
     Vérifie la qualité des données OHLCV TradingView avant l'analyse.
     Les erreurs sont bloquantes (l'analyse ne doit pas continuer) ; les avertissements sont indicatifs.
+
+    seuil_corps_pct : seuil au-delà duquel un corps de bougie est considéré extrême.
+                      Utiliser ~2.0 pour le forex, 30.0 (défaut) pour le crypto.
     """
     result = HealthCheckResult()
     n = len(df)
@@ -124,11 +127,11 @@ def tv_health_check(df: pd.DataFrame) -> HealthCheckResult:
         if zero_vol / n > 0.2:
             result.warnings.append(f"{zero_vol} bougie(s) ({zero_vol/n*100:.0f}%) avec volume nul")
 
-    # ── Mouvements de bougie extrêmes (corps > 30% du prix) ──
+    # ── Mouvements de bougie extrêmes ──
     body_pct = (df["close"] - df["open"]).abs() / df["open"] * 100
-    extreme = (body_pct > 30).sum()
+    extreme = (body_pct > seuil_corps_pct).sum()
     if extreme > 0:
-        result.warnings.append(f"{extreme} bougie(s) avec un corps >30% — anomalie possible ou ajustement de cours")
+        result.warnings.append(f"{extreme} bougie(s) avec un corps >{seuil_corps_pct:.4g}% — anomalie possible ou ajustement de cours")
 
     return result
 
