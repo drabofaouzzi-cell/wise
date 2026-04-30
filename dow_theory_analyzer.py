@@ -56,6 +56,14 @@ class TrendAnalysis:
     signals: list = field(default_factory=list)
 
 
+@dataclass
+class HealthCheckResult:
+    passed: bool = True
+    errors: list = field(default_factory=list)    # bloquants
+    warnings: list = field(default_factory=list)  # non bloquants
+    stats: dict = field(default_factory=dict)
+
+
 # ─────────────────────────────────────────────
 # Chargement des données TradingView
 # ─────────────────────────────────────────────
@@ -90,6 +98,122 @@ def load_tradingview_csv(path: str) -> pd.DataFrame:
         df["volume"] = 0
 
     return df
+
+
+# ─────────────────────────────────────────────
+# Contrôle qualité des données TradingView
+# ─────────────────────────────────────────────
+
+def tv_health_check(df: pd.DataFrame, min_bars: int = 30) -> HealthCheckResult:
+    """
+    Vérifie la qualité des données TradingView exportées avant analyse.
+    Retourne un HealthCheckResult avec erreurs bloquantes et avertissements.
+    """
+    result = HealthCheckResult()
+    n = len(df)
+
+    result.stats["bars"] = n
+    result.stats["start"] = df["date"].iloc[0].strftime("%Y-%m-%d") if n else "—"
+    result.stats["end"] = df["date"].iloc[-1].strftime("%Y-%m-%d") if n else "—"
+
+    # 1. Nombre de bougies suffisant
+    if n < min_bars:
+        result.errors.append(f"Trop peu de bougies : {n} (minimum requis : {min_bars})")
+        result.passed = False
+
+    # 2. Timestamps dupliqués
+    dupes = int(df["date"].duplicated().sum())
+    if dupes > 0:
+        result.errors.append(f"{dupes} timestamp(s) dupliqué(s) détecté(s)")
+        result.passed = False
+
+    # 3. NaN dans les colonnes OHLC
+    for col in ["open", "high", "low", "close"]:
+        nan_count = int(df[col].isna().sum())
+        if nan_count > 0:
+            pct = nan_count / n * 100
+            msg = f"Colonne '{col}' : {nan_count} valeur(s) NaN ({pct:.1f}%)"
+            if pct > 5:
+                result.errors.append(msg)
+                result.passed = False
+            else:
+                result.warnings.append(msg)
+
+    # 4. Cohérence OHLC : high >= max(open,close) et low <= min(open,close)
+    invalid_high = int((df["high"] < df[["open", "close"]].max(axis=1)).sum())
+    invalid_low = int((df["low"] > df[["open", "close"]].min(axis=1)).sum())
+    if invalid_high > 0:
+        result.errors.append(f"{invalid_high} bougie(s) avec high < max(open, close)")
+        result.passed = False
+    if invalid_low > 0:
+        result.errors.append(f"{invalid_low} bougie(s) avec low > min(open, close)")
+        result.passed = False
+
+    # 5. Prix nuls ou négatifs
+    for col in ["open", "high", "low", "close"]:
+        bad = int((df[col] <= 0).sum())
+        if bad > 0:
+            result.errors.append(f"Colonne '{col}' : {bad} valeur(s) <= 0")
+            result.passed = False
+
+    # 6. Gaps temporels anormaux (> 3× la médiane)
+    if n > 1:
+        deltas = df["date"].diff().dropna()
+        median_delta = deltas.median()
+        result.stats["median_interval"] = str(median_delta)
+        if median_delta.total_seconds() > 0:
+            large_gaps = int((deltas > median_delta * 3).sum())
+            if large_gaps > 0:
+                result.warnings.append(
+                    f"{large_gaps} gap(s) temporel(s) anormal(aux) détecté(s) (> 3× l'intervalle médian)"
+                )
+
+    # 7. Mouvements extrêmes (variation close > 50% en une bougie)
+    extreme = int((df["close"].pct_change().dropna().abs() > 0.5).sum())
+    if extreme > 0:
+        result.warnings.append(f"{extreme} mouvement(s) extrême(s) > 50% sur une bougie")
+
+    # 8. Volume
+    has_volume = "volume" in df.columns and df["volume"].sum() > 0
+    if has_volume:
+        neg_vol = int((df["volume"] < 0).sum())
+        if neg_vol > 0:
+            result.errors.append(f"{neg_vol} valeur(s) de volume négative(s)")
+            result.passed = False
+        zero_pct = df["volume"].eq(0).sum() / n * 100
+        if zero_pct > 20:
+            result.warnings.append(f"{zero_pct:.1f}% des bougies ont un volume nul")
+    else:
+        result.warnings.append("Aucune donnée de volume — l'analyse du volume sera désactivée")
+
+    result.stats["errors"] = len(result.errors)
+    result.stats["warnings"] = len(result.warnings)
+    return result
+
+
+def print_health_report(result: HealthCheckResult) -> None:
+    status = "✅ OK" if result.passed else "❌ ÉCHEC"
+    sep = "═" * 60
+    print(f"\n{sep}")
+    print(f"  CONTRÔLE QUALITÉ DONNÉES — {status}")
+    print(
+        f"  Bougies : {result.stats.get('bars', '?')}  |  "
+        f"{result.stats.get('start', '')} → {result.stats.get('end', '')}"
+    )
+    if "median_interval" in result.stats:
+        print(f"  Intervalle médian : {result.stats['median_interval']}")
+    print(sep)
+    if result.errors:
+        print("\n  ERREURS (bloquantes) :")
+        for e in result.errors:
+            print(f"    ❌ {e}")
+    if result.warnings:
+        print("\n  AVERTISSEMENTS :")
+        for w in result.warnings:
+            print(f"    ⚠️  {w}")
+    if not result.errors and not result.warnings:
+        print("\n  Toutes les vérifications ont réussi.")
+    print(f"{sep}\n")
 
 
 # ─────────────────────────────────────────────

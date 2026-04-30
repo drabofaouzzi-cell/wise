@@ -16,6 +16,8 @@ import numpy as np
 import pandas as pd
 from dow_theory_analyzer import (
     load_tradingview_csv,
+    tv_health_check,
+    print_health_report,
     analyze,
     print_report,
     plot_analysis,
@@ -41,8 +43,8 @@ def generate_demo_data(n: int = 300) -> pd.DataFrame:
     closes = np.array(prices)
     opens = np.roll(closes, 1)
     opens[0] = closes[0] * 0.999
-    highs = closes * (1 + np.abs(np.random.normal(0, 0.005, n)))
-    lows = closes * (1 - np.abs(np.random.normal(0, 0.005, n)))
+    highs = np.maximum(opens, closes) * (1 + np.abs(np.random.normal(0, 0.005, n)))
+    lows = np.minimum(opens, closes) * (1 - np.abs(np.random.normal(0, 0.005, n)))
     volumes = np.random.lognormal(10, 0.5, n) * (1 + 0.3 * (closes > opens).astype(float))
 
     return pd.DataFrame({
@@ -66,6 +68,7 @@ def main():
     parser.add_argument("--window", type=int, default=5, help="Fenêtre swing points (défaut: 5)")
     parser.add_argument("--save", type=str, default=None, help="Sauvegarder le graphique (ex: chart.png)")
     parser.add_argument("--demo", action="store_true", help="Lancer avec données synthétiques de démo")
+    parser.add_argument("--no-health-check", action="store_true", help="Ignorer le contrôle qualité des données")
     args = parser.parse_args()
 
     if args.demo:
@@ -80,6 +83,13 @@ def main():
         parser.print_help()
         print("\n⚠️  Fournissez --file <csv> ou --demo pour tester.\n")
         return
+
+    if not args.no_health_check:
+        health = tv_health_check(df)
+        print_health_report(health)
+        if not health.passed:
+            print("❌ Contrôle qualité échoué — analyse annulée. Corrigez les erreurs ou utilisez --no-health-check.\n")
+            return
 
     result = analyze(df, swing_window=args.window)
     print_report(df, result, symbol=symbol)
