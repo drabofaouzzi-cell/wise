@@ -19,6 +19,8 @@ from dow_theory_analyzer import (
     analyze,
     print_report,
     plot_analysis,
+    tv_health_check,
+    print_health_report,
 )
 
 
@@ -66,7 +68,18 @@ def main():
     parser.add_argument("--window", type=int, default=5, help="Fenêtre swing points (défaut: 5)")
     parser.add_argument("--save", type=str, default=None, help="Sauvegarder le graphique (ex: chart.png)")
     parser.add_argument("--demo", action="store_true", help="Lancer avec données synthétiques de démo")
+    parser.add_argument("--health-check", action="store_true", help="Vérifier la connexion/validité des données TradingView")
+    parser.add_argument("--max-gap", type=int, default=7, help="Seuil de gap max entre bougies en jours (défaut: 7)")
+    parser.add_argument("--max-staleness", type=int, default=5, help="Fraîcheur max des données en jours (défaut: 5)")
     args = parser.parse_args()
+
+    if args.health_check:
+        if not args.file:
+            print("\n⚠️  --health-check requiert --file <csv>\n")
+            return
+        report = tv_health_check(args.file, max_gap_days=args.max_gap, max_staleness_days=args.max_staleness)
+        print_health_report(report, args.file)
+        raise SystemExit(0 if report.ok else 1)
 
     if args.demo:
         print("\n[MODE DÉMO] Génération de données synthétiques…")

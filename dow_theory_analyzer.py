@@ -57,6 +57,118 @@ class TrendAnalysis:
 
 
 # ─────────────────────────────────────────────
+# Health check TradingView
+# ─────────────────────────────────────────────
+
+@dataclass
+class TVHealthReport:
+    ok: bool
+    checks: list  # list of (label: str, passed: bool, detail: str)
+    summary: str
+
+
+def tv_health_check(path: str, max_gap_days: int = 7, max_staleness_days: int = 5) -> TVHealthReport:
+    """
+    Verifies that a TradingView CSV export is valid and up-to-date.
+
+    Checks performed:
+      1. File is readable and is a valid TradingView CSV
+      2. Required OHLC columns are present
+      3. No duplicate timestamps
+      4. No excessive gaps between candles (> max_gap_days)
+      5. Data is recent (last candle within max_staleness_days of today)
+      6. No NaN values in OHLC columns
+      7. Price coherence: high >= max(open, close) and low <= min(open, close)
+
+    Returns a TVHealthReport with per-check results and an overall status.
+    """
+    import datetime
+
+    checks: list = []
+
+    def add(label: str, passed: bool, detail: str = ""):
+        checks.append((label, passed, detail))
+
+    # ── 1. File load ──
+    df: Optional[pd.DataFrame] = None
+    try:
+        df = load_tradingview_csv(path)
+        add("File readable & parseable", True, f"{len(df)} rows loaded")
+    except Exception as exc:
+        add("File readable & parseable", False, str(exc))
+        return TVHealthReport(ok=False, checks=checks, summary="FAILED — could not load CSV")
+
+    # ── 2. Required columns ──
+    required = {"open", "high", "low", "close"}
+    missing = required - set(df.columns)
+    add("Required OHLC columns present", not missing,
+        "OK" if not missing else f"Missing: {missing}")
+
+    # ── 3. Duplicate timestamps ──
+    dupes = int(df["date"].duplicated().sum())
+    add("No duplicate timestamps", dupes == 0,
+        "OK" if dupes == 0 else f"{dupes} duplicate(s)")
+
+    # ── 4. Gap check ──
+    if len(df) > 1:
+        diffs = df["date"].diff().dropna()
+        max_gap = diffs.max()
+        gap_days = max_gap.total_seconds() / 86400
+        add(f"No gap > {max_gap_days}d between candles", gap_days <= max_gap_days,
+            f"Max gap: {gap_days:.1f}d")
+    else:
+        add(f"No gap > {max_gap_days}d between candles", False, "Too few rows to check")
+
+    # ── 5. Staleness ──
+    last_date = df["date"].iloc[-1]
+    now_utc = pd.Timestamp.utcnow().tz_localize(None) if last_date.tzinfo is None else pd.Timestamp.utcnow()
+    staleness = (now_utc - last_date).total_seconds() / 86400
+    add(f"Data fresh (last candle within {max_staleness_days}d)", staleness <= max_staleness_days,
+        f"Last candle: {last_date.date()}  ({staleness:.1f}d ago)")
+
+    # ── 6. NaN in OHLC ──
+    nan_counts = df[["open", "high", "low", "close"]].isna().sum().to_dict()
+    total_nan = sum(nan_counts.values())
+    add("No NaN in OHLC", total_nan == 0,
+        "OK" if total_nan == 0 else str(nan_counts))
+
+    # ── 7. Price coherence ──
+    bad_high = int((df["high"] < df[["open", "close"]].max(axis=1)).sum())
+    bad_low = int((df["low"] > df[["open", "close"]].min(axis=1)).sum())
+    coherent = bad_high == 0 and bad_low == 0
+    add("OHLC price coherence (H≥max(O,C), L≤min(O,C))", coherent,
+        "OK" if coherent else f"Bad high: {bad_high} rows, Bad low: {bad_low} rows")
+
+    passed = sum(1 for _, p, _ in checks if p)
+    total = len(checks)
+    overall_ok = all(p for _, p, _ in checks)
+
+    if overall_ok:
+        summary = f"OK — all {total} checks passed"
+    else:
+        failed = [label for label, p, _ in checks if not p]
+        summary = f"DEGRADED — {passed}/{total} passed. Failed: {', '.join(failed)}"
+
+    return TVHealthReport(ok=overall_ok, checks=checks, summary=summary)
+
+
+def print_health_report(report: TVHealthReport, path: str):
+    sep = "═" * 60
+    print(f"\n{sep}")
+    print(f"  TV HEALTH CHECK — {path}")
+    print(sep)
+    for label, passed, detail in report.checks:
+        icon = "✅" if passed else "❌"
+        print(f"  {icon}  {label}")
+        if detail and detail != "OK":
+            print(f"       {detail}")
+    print(f"{'─'*60}")
+    status = "✅ CONNECTED" if report.ok else "❌ NOT CONNECTED"
+    print(f"  {status}  |  {report.summary}")
+    print(f"{sep}\n")
+
+
+# ─────────────────────────────────────────────
 # Chargement des données TradingView
 # ─────────────────────────────────────────────
 
