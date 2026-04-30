@@ -537,10 +537,11 @@ def plot_analysis(df: pd.DataFrame, result: TrendAnalysis, symbol: str = "Actif"
         ax1.axhline(result.resistance, color="#f0a500", linestyle="--", linewidth=1.2, alpha=0.7, label=f"Résistance {result.resistance:.4f}")
 
     # ── Moyennes mobiles 50 / 200 ──
-    for period, color in [(50, "#a371f7"), (200, "#ff7b72")]:
+    ma_styles = {50: ("#a371f7", 1.2, 0.8), 200: ("#ff7b72", 2.0, 1.0)}
+    for period, (color, lw, alpha) in ma_styles.items():
         if len(df) > period:
             ma = df["close"].rolling(period).mean()
-            ax1.plot(dates, ma, color=color, linewidth=1, alpha=0.8, label=f"MA{period}")
+            ax1.plot(dates, ma, color=color, linewidth=lw, alpha=alpha, label=f"MA{period}")
 
     trend_color = "#26a641" if result.primary == Trend.BULL else ("#f85149" if result.primary == Trend.BEAR else "#8b949e")
     ax1.set_title(
