@@ -4,10 +4,11 @@ Point d'entrée — Analyse Dow Theory sur données TradingView.
 Usage :
     python run_analysis.py --file data.csv --symbol BTCUSDT
     python run_analysis.py --file data.csv --symbol EURUSD --window 8 --save chart.png
-    python run_analysis.py --demo   # génère des données synthétiques pour tester
+    python run_analysis.py --demo          # génère des données synthétiques pour tester
+    python run_analysis.py --demo --check  # contrôle qualité des données uniquement
 
 Export TradingView :
-    Ouvre le graphique → clic droit sur la bougie → "Download chart data"
+    Ouvre le graphique → clic droit sur la bougie → "Télécharger les données du graphique"
     Le CSV contient : time, open, high, low, close, volume
 """
 

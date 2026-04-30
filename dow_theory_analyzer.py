@@ -16,7 +16,7 @@ warnings.filterwarnings("ignore")
 
 
 # ─────────────────────────────────────────────
-# TV Health Check
+# Contrôle qualité des données TV
 # ─────────────────────────────────────────────
 
 @dataclass
@@ -29,82 +29,82 @@ class HealthCheckResult:
 
 def tv_health_check(df: pd.DataFrame) -> HealthCheckResult:
     """
-    Validates TradingView OHLCV data quality before analysis.
-    Errors are fatal (analysis should not proceed); warnings are advisory.
+    Vérifie la qualité des données OHLCV TradingView avant l'analyse.
+    Les erreurs sont bloquantes (l'analyse ne doit pas continuer) ; les avertissements sont indicatifs.
     """
     result = HealthCheckResult()
     n = len(df)
 
-    # ── Basic stats ──
-    result.stats["row_count"] = n
+    # ── Statistiques de base ──
+    result.stats["nb_lignes"] = n
     if n > 0 and "date" in df.columns:
-        result.stats["date_start"] = str(df["date"].iloc[0])[:10]
-        result.stats["date_end"] = str(df["date"].iloc[-1])[:10]
+        result.stats["date_debut"] = str(df["date"].iloc[0])[:10]
+        result.stats["date_fin"] = str(df["date"].iloc[-1])[:10]
 
-    # ── Minimum rows ──
+    # ── Nombre de lignes minimum ──
     if n < 10:
-        result.errors.append(f"Insufficient data: {n} rows (minimum 10 required for any analysis)")
+        result.errors.append(f"Données insuffisantes : {n} ligne(s) (minimum 10 requis pour toute analyse)")
         result.passed = False
-        return result  # no point checking further
+        return result  # inutile de continuer
     if n < 30:
-        result.warnings.append(f"Only {n} rows — phase detection requires ≥30 candles")
+        result.warnings.append(f"Seulement {n} lignes — la détection de phase requiert ≥30 bougies")
     elif n < 100:
-        result.warnings.append(f"Only {n} rows — analysis reliability improves with more data")
+        result.warnings.append(f"Seulement {n} lignes — la fiabilité de l'analyse augmente avec plus de données")
 
-    # ── Required columns ──
+    # ── Colonnes obligatoires ──
     required = {"open", "high", "low", "close"}
     missing = required - set(df.columns)
     if missing:
-        result.errors.append(f"Missing required columns: {sorted(missing)}")
+        result.errors.append(f"Colonnes manquantes : {sorted(missing)}")
         result.passed = False
         return result
 
-    # ── NaN values in price columns ──
+    # ── Valeurs NaN dans les colonnes de prix ──
     price_cols = ["open", "high", "low", "close"]
     for col in price_cols:
         nan_count = df[col].isna().sum()
         if nan_count > 0:
             pct = nan_count / n * 100
             if pct > 5:
-                result.errors.append(f"Column '{col}' has {nan_count} NaN values ({pct:.1f}%) — too many missing prices")
+                result.errors.append(f"Colonne '{col}' : {nan_count} valeur(s) NaN ({pct:.1f}%) — trop de prix manquants")
                 result.passed = False
             else:
-                result.warnings.append(f"Column '{col}' has {nan_count} NaN value(s) ({pct:.1f}%)")
+                result.warnings.append(f"Colonne '{col}' : {nan_count} valeur(s) NaN ({pct:.1f}%)")
 
     if not result.passed:
         return result
 
-    # ── Non-positive prices ──
+    # ── Prix nuls ou négatifs ──
     for col in price_cols:
         non_pos = (df[col] <= 0).sum()
         if non_pos > 0:
-            result.errors.append(f"Column '{col}' has {non_pos} non-positive value(s) (zero or negative price)")
+            result.errors.append(f"Colonne '{col}' : {non_pos} valeur(s) non positive(s) (prix nul ou négatif)")
             result.passed = False
 
-    # ── OHLC consistency: high >= low ──
+    # ── Cohérence OHLC : high >= low ──
     invalid_hl = (df["high"] < df["low"]).sum()
     if invalid_hl > 0:
-        result.errors.append(f"{invalid_hl} candle(s) where high < low (corrupted OHLC data)")
+        result.errors.append(f"{invalid_hl} bougie(s) avec high < low (données OHLC corrompues)")
         result.passed = False
 
-    # ── OHLC consistency: high >= open/close and low <= open/close ──
+    # ── Cohérence OHLC : high >= max(open, close) et low <= min(open, close) ──
     tol = 1e-8
     invalid_high = ((df["high"] + tol) < df[["open", "close"]].max(axis=1)).sum()
     invalid_low = ((df["low"] - tol) > df[["open", "close"]].min(axis=1)).sum()
     if invalid_high > 0:
-        result.errors.append(f"{invalid_high} candle(s) where high < max(open, close)")
+        result.errors.append(f"{invalid_high} bougie(s) avec high < max(open, close)")
         result.passed = False
     if invalid_low > 0:
-        result.errors.append(f"{invalid_low} candle(s) where low > min(open, close)")
+        result.errors.append(f"{invalid_low} bougie(s) avec low > min(open, close)")
         result.passed = False
 
-    # ── Duplicate timestamps ──
+    # ── Horodatages dupliqués ──
     if "date" in df.columns:
         dupes = df["date"].duplicated().sum()
         if dupes > 0:
-            result.warnings.append(f"{dupes} duplicate timestamp(s) detected")
+            result.warnings.append(f"{dupes} horodatage(s) dupliqué(s) détecté(s)")
 
-    # ── Date gaps ──
+    # ── Lacunes temporelles ──
     if "date" in df.columns and n >= 2:
         deltas = df["date"].diff().dropna()
         median_delta = deltas.median()
@@ -113,50 +113,50 @@ def tv_health_check(df: pd.DataFrame) -> HealthCheckResult:
             large_gaps = (deltas > gap_threshold).sum()
             if large_gaps > 0:
                 result.warnings.append(
-                    f"{large_gaps} large gap(s) in time series (>{int(gap_threshold.total_seconds() / 3600)}h between candles)"
+                    f"{large_gaps} lacune(s) importante(s) dans la série temporelle (>{int(gap_threshold.total_seconds() / 3600)}h entre deux bougies)"
                 )
 
     # ── Volume ──
     if "volume" not in df.columns or df["volume"].sum() == 0:
-        result.warnings.append("No volume data — volume-based signals will be unavailable")
+        result.warnings.append("Aucune donnée de volume — les signaux basés sur le volume seront indisponibles")
     else:
         zero_vol = (df["volume"] == 0).sum()
         if zero_vol / n > 0.2:
-            result.warnings.append(f"{zero_vol} candles ({zero_vol/n*100:.0f}%) have zero volume")
+            result.warnings.append(f"{zero_vol} bougie(s) ({zero_vol/n*100:.0f}%) avec volume nul")
 
-    # ── Extreme single-candle moves (body > 30% of price) ──
+    # ── Mouvements de bougie extrêmes (corps > 30% du prix) ──
     body_pct = (df["close"] - df["open"]).abs() / df["open"] * 100
     extreme = (body_pct > 30).sum()
     if extreme > 0:
-        result.warnings.append(f"{extreme} candle(s) with body move >30% — possible data anomaly or split")
+        result.warnings.append(f"{extreme} bougie(s) avec un corps >30% — anomalie possible ou ajustement de cours")
 
     return result
 
 
 def print_health_report(result: HealthCheckResult) -> None:
     sep = "═" * 60
-    status = "✅ PASSED" if result.passed else "❌ FAILED"
+    status = "✅ VALIDÉ" if result.passed else "❌ ÉCHEC"
     print(f"\n{sep}")
-    print(f"  TV DATA HEALTH CHECK — {status}")
+    print(f"  CONTRÔLE QUALITÉ DONNÉES TV — {status}")
     print(sep)
 
     stats = result.stats
-    if "row_count" in stats:
-        date_range = f"{stats.get('date_start', '?')} → {stats.get('date_end', '?')}"
-        print(f"  Rows : {stats['row_count']}   |   Period : {date_range}")
+    if "nb_lignes" in stats:
+        periode = f"{stats.get('date_debut', '?')} → {stats.get('date_fin', '?')}"
+        print(f"  Lignes : {stats['nb_lignes']}   |   Période : {periode}")
 
     if result.errors:
-        print("\n  ERRORS (analysis blocked):")
+        print("\n  ERREURS (analyse bloquée) :")
         for e in result.errors:
             print(f"    ✗  {e}")
 
     if result.warnings:
-        print("\n  WARNINGS:")
+        print("\n  AVERTISSEMENTS :")
         for w in result.warnings:
             print(f"    ⚠  {w}")
 
     if not result.errors and not result.warnings:
-        print("\n  No issues found — data looks clean.")
+        print("\n  Aucun problème détecté — données propres.")
 
     print(f"{sep}\n")
 
